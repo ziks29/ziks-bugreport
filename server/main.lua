@@ -90,8 +90,33 @@ local function limitLeft(k)
     return 0
 end
 
+local function devhubKey() return (GetConvar('ziks_bugreport_devhub', '') or ''):gsub('%s', '') end
+local function webhookSet() return GetConvar('ziks_bugreport_webhook', '') ~= '' end
+local DEVHUB = (GetConvar('ziks_bugreport_devhub_url', 'https://dev.ushpuras.dev') or ''):gsub('/+$', '')
+
+-- Dev Hub tester check (workspace member or tester role in the linked Discord server), cached 5 min
+local testerCache = {}
+local function devhubTester(src)
+    local key, did = devhubKey(), discordId(src)
+    if key == '' or not did or did == '' then return false end
+    local c = testerCache[did]
+    if c and os.time() - c.at < 300 then return c.v end
+    local p = promise.new()
+    PerformHttpRequest(DEVHUB .. '/api/ingest/tester?discord_id=' .. did, function(status, body)
+        p:resolve({ status = status, body = body })
+    end, 'GET', '', { ['Authorization'] = 'Bearer ' .. key })
+    local r = Citizen.Await(p)
+    local v = false
+    if r.status == 200 then
+        local ok, d = pcall(json.decode, r.body or '{}')
+        v = ok and type(d) == 'table' and d.tester == true
+        testerCache[did] = { v = v, at = os.time() }
+    end
+    return v
+end
+
 local function canSeverity(src)
-    return Config.SeverityForAll == true or IsPlayerAceAllowed(src, Config.SeverityAce)
+    return Config.SeverityForAll == true or IsPlayerAceAllowed(src, Config.SeverityAce) or devhubTester(src)
 end
 
 local function clip(s, n)
@@ -186,9 +211,9 @@ end
 
 -- ===== delivery: server/webhook.js does the HTTPS multipart upload =====
 local deliveries, dseq = {}, 0
-AddEventHandler('ziks-bugreport:delivered', function(id, status, info)
+AddEventHandler('ziks-bugreport:delivered', function(id, status, info, remaining)
     local p = deliveries[id]
-    if p then deliveries[id] = nil p:resolve({ status = status, info = info }) end
+    if p then deliveries[id] = nil p:resolve({ status = status, info = info, remaining = remaining }) end
 end)
 
 local function deliver(report)
@@ -198,7 +223,7 @@ local function deliver(report)
     TriggerEvent('ziks-bugreport:deliver', id, report)
     SetTimeout(240000, function() if deliveries[id] then deliveries[id] = nil p:resolve({ status = 'retry', info = 'timeout' }) end end)
     local r = Citizen.Await(p)
-    return r.status, r.info -- 'ok' | 'retry' | 'fail'
+    return r.status, r.info, r.remaining -- 'ok' | 'retry' | 'fail'; remaining = targets still to retry
 end
 
 local QUEUE_FILE, QUEUE_MAX = 'queue.json', 10
@@ -292,7 +317,7 @@ local function buildReport(src, f, info)
         steps = clip(f.reproduction, 1500), expected = clip(f.expected, 600), actual = clip(f.actual, 600),
         category = s(catLabel, 40), severity = sev, severityLabel = L[sev] or sev,
         reporter = {
-            name = s(GetPlayerName(src), 64), char = P.char and s(P.char, 64) or nil, server_id = src,
+            name = s(GetPlayerName(src), 64), char = P.char and s(P.char, 64) or nil, server_id = src, citizenid = P.id and s(P.id, 60) or nil, job = P.job and s(P.job, 40) or nil,
             discord = discordId(src), license = GetPlayerIdentifierByType(src, 'license'),
         },
         location = ('%s%s · %s'):format(s(info.street, 60), info.cross and (' / ' .. s(info.cross, 60)) or '', s(info.zone, 60)),
@@ -300,6 +325,8 @@ local function buildReport(src, f, info)
         vehicle = vehLine,
         client = ('FPS %s · ping %s ms · %s'):format(f2(info.fps), GetPlayerPing(src), P.job and (s(P.jobLabel or P.job, 30)) or P.fw),
         build = clip(GetConvar('version', ''), 120),
+        environment = table.concat(env, '\n'),
+        serverConsole = (Config.Attach.console ~= false) and table.concat(ring(cAll, cAllPos, cAllN, ARING, ARING), '\n') or nil,
         server = clip(GetConvar('sv_projectName', GetConvar('sv_hostname', '')), 100):gsub('%^%d', ''),
         reportText = Config.Attach.reportFile ~= false and table.concat(sections, '\n') or nil,
         playerJson = playerJson,
@@ -319,8 +346,8 @@ end
 
 handlers.submit = function(src, f, info)
     if type(f) ~= 'table' or type(info) ~= 'table' then return false, 'bad request' end
-    if GetConvar('ziks_bugreport_webhook', '') == '' then
-        log('^1ziks_bugreport_webhook is not set^7 - add `set ziks_bugreport_webhook "https://discord.com/api/webhooks/..."` to server.cfg')
+    if not webhookSet() and devhubKey() == '' then
+        log('^1nothing to send to^7 - set ziks_bugreport_webhook and/or ziks_bugreport_devhub in server.cfg')
         return false, 'webhook not configured'
     end
     local k = limitKey(src)
@@ -329,7 +356,7 @@ handlers.submit = function(src, f, info)
     inflight[src] = true
     local ok, report = pcall(buildReport, src, f, info)
     if not ok then inflight[src] = nil error(report) end
-    local status, why = deliver(report)
+    local status, why, remaining = deliver(report)
     inflight[src] = nil
     if status == 'fail' then
         log('^1rejected by Discord:^7 ' .. tostring(why))
@@ -338,12 +365,13 @@ handlers.submit = function(src, f, info)
     last[k] = os.time()
     hourly[k] = hourly[k] or {}
     hourly[k][#hourly[k] + 1] = os.time()
-    if status == 'retry' then
+    if type(remaining) == 'table' and #remaining > 0 then
         if #queue >= QUEUE_MAX then table.remove(queue, 1) end
+        report.targets = remaining
         queue[#queue + 1] = report
         persistQueue()
-        log(('Discord unavailable (%s) - report queued (%d in queue)'):format(tostring(why), #queue))
-        return true, 'queued'
+        log(('%s unavailable (%s) - queued for retry (%d in queue)'):format(table.concat(remaining, '+'), tostring(why), #queue))
+        if status == 'retry' then return true, 'queued' end
     end
     log(('report from %s (%s) sent: %s'):format(GetPlayerName(src), src, report.title))
     return true, 'sent'
@@ -361,8 +389,8 @@ CreateThread(function()
         if #queue > 0 then
             local rest = {}
             for _, r in ipairs(queue) do
-                local st = deliver(r)
-                if st == 'retry' then rest[#rest + 1] = r end
+                local _, _, remaining = deliver(r)
+                if type(remaining) == 'table' and #remaining > 0 then r.targets = remaining rest[#rest + 1] = r end
             end
             queue = rest
             persistQueue()

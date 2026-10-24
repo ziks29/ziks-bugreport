@@ -3,6 +3,11 @@ Config = {}
 -- The Discord webhook URL is NOT set here. Put it in server.cfg (server-only, never sent to players):
 --   set ziks_bugreport_webhook "https://discord.com/api/webhooks/123/abc"
 -- Use `set`, never `setr`: `setr` replicates the value to every client.
+--
+-- Optional: send reports to your ziks Dev Hub board instead of (or as well as) the webhook.
+-- Create a key at https://dev.ushpuras.dev -> Settings -> Game server, then:
+--   set ziks_bugreport_devhub "dhk_..."
+-- Players with a tester role on your connected Discord server can then pick a severity too.
 
 Config.Locale   = 'en'          -- 'en' | 'ru'
 Config.Key      = 'F9'          -- default key (players can rebind it in GTA settings > Key Bindings > FiveM)

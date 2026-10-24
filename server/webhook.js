@@ -1,4 +1,4 @@
-// Discord webhook delivery for ziks-bugreport.
+// Delivery for ziks-bugreport: Discord webhook and/or ziks Dev Hub (https://dev.ushpuras.dev).
 // Runs in the server's Node runtime: real binary multipart upload (screenshot + report files).
 // Triggered only by the Lua side via a LOCAL server event (`on`, not `onNet`), so players cannot call it.
 const https = require('https');
@@ -13,6 +13,13 @@ let guildId = null;
 function webhookUrl() {
   return (GetConvar('ziks_bugreport_webhook', '') || '').trim();
 }
+function devhubKey() {
+  return (GetConvar('ziks_bugreport_devhub', '') || '').trim();
+}
+function devhubBase() {
+  return (GetConvar('ziks_bugreport_devhub_url', 'https://dev.ushpuras.dev') || '').trim().replace(/\/+$/, '');
+}
+const DEVHUB_KEY = /^dhk_[0-9a-f]{48}$/;
 
 function request(method, url, headers, body) {
   return new Promise((resolve) => {
@@ -118,6 +125,38 @@ function filesFor(r, drop) {
 
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
+async function sendDevhub(r) {
+  const key = devhubKey();
+  if (!DEVHUB_KEY.test(key)) return ['fail', 'ziks_bugreport_devhub is not a Dev Hub key (dhk_...)'];
+  const rep = r.reporter || {};
+  const payload = {
+    title: r.title, description: r.description, category: r.category, severity: r.severity,
+    reproduction: r.steps, expected: r.expected, actual: r.actual,
+    environment: r.environment || '', build: r.build || '',
+    reporter: { server_id: String(rep.server_id || ''), citizenid: rep.citizenid || '', discord_id: rep.discord || '', name: rep.name || '', char: rep.char || '', job: rep.job || '' },
+    screenshot_b64: r.screenshot || undefined,
+    player_data: r.playerJson || undefined,
+    server_console: r.serverConsole || undefined,
+    report_text: r.reportText || undefined,
+  };
+  const body = Buffer.from(JSON.stringify(payload), 'utf8');
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const res = await request('POST', devhubBase() + '/api/ingest/bug', { 'Content-Type': 'application/json', 'Content-Length': body.length, Authorization: 'Bearer ' + key }, body);
+    if (res.status === 201) {
+      let url = null;
+      try { url = JSON.parse(res.body).url || null; } catch (_) {}
+      return ['ok', url];
+    }
+    if (res.status === 429) return ['retry', 'Dev Hub hourly report limit reached'];
+    if (res.status === 0 || res.status >= 500) {
+      if (attempt < 3) { await sleep(1500 * attempt); continue; }
+      return ['retry', `Dev Hub HTTP ${res.status}`];
+    }
+    return ['fail', `Dev Hub HTTP ${res.status} ${cut(res.body, 200)}`];
+  }
+  return ['retry', 'Dev Hub gave up after retries'];
+}
+
 async function send(r) {
   const url = webhookUrl();
   if (!url) return ['fail', 'webhook not configured'];
@@ -164,17 +203,48 @@ async function send(r) {
   return ['retry', 'gave up after retries'];
 }
 
+// Sends to every configured target (or only report.targets when retrying a queued report).
+// ok if any target succeeded; retry if the rest only failed temporarily; remaining = targets to retry.
+async function deliverAll(report) {
+  const configured = [];
+  if (webhookUrl()) configured.push('webhook');
+  if (devhubKey()) configured.push('devhub');
+  const targets = Array.isArray(report.targets) && report.targets.length ? report.targets.filter((t) => configured.includes(t)) : configured;
+  if (!targets.length) return ['fail', 'no delivery target configured', []];
+  const results = await Promise.all(targets.map(async (t) => {
+    try { return [t, ...(t === 'devhub' ? await sendDevhub(report) : await send(report))]; }
+    catch (e) { return [t, 'retry', String(e && e.message)]; }
+  }));
+  const ok = results.filter((x) => x[1] === 'ok');
+  const retry = results.filter((x) => x[1] === 'retry');
+  const fail = results.filter((x) => x[1] === 'fail');
+  fail.forEach((x) => console.log(`${TAG} ^1${x[0]} rejected the report:^7 ${x[2]}`));
+  if (retry.length) return [ok.length ? 'ok' : 'retry', retry.map((x) => `${x[0]}: ${x[2]}`).join('; '), retry.map((x) => x[0])];
+  if (ok.length) return ['ok', (ok.find((x) => x[0] === 'devhub') || ok[0])[2], []];
+  return ['fail', fail.map((x) => `${x[0]}: ${x[2]}`).join('; '), []];
+}
+
 on('ziks-bugreport:deliver', async (id, report) => {
   let out;
-  try { out = await send(report || {}); } catch (e) { out = ['retry', String(e && e.message)]; }
-  emit('ziks-bugreport:delivered', id, out[0], out[1]);
+  try { out = await deliverAll(report || {}); } catch (e) { out = ['retry', String(e && e.message), []]; }
+  emit('ziks-bugreport:delivered', id, out[0], out[1], out[2]);
 });
 
 // startup check: validates the webhook and remembers the guild for message links
 setTimeout(async () => {
+  const key = devhubKey();
+  if (key) {
+    if (!DEVHUB_KEY.test(key)) console.log(`${TAG} ^1ziks_bugreport_devhub is not a Dev Hub key (dhk_...).^7`);
+    else {
+      const res = await request('GET', devhubBase() + '/api/ingest/ping', { Authorization: 'Bearer ' + key });
+      if (res.status === 200) {
+        try { const d = JSON.parse(res.body); console.log(`${TAG} Dev Hub OK: "${d.workspace.name}" -> ${d.url}`); } catch (_) {}
+      } else console.log(`${TAG} ^1Dev Hub check failed: HTTP ${res.status}^7 (revoked key?)`);
+    }
+  }
   const url = webhookUrl();
   if (!url) {
-    console.log(`${TAG} ^1No webhook set.^7 Add to server.cfg:  set ziks_bugreport_webhook "https://discord.com/api/webhooks/..."`);
+    if (!key) console.log(`${TAG} ^1Nothing to send to.^7 Add to server.cfg:  set ziks_bugreport_webhook "https://discord.com/api/webhooks/..."  and/or  set ziks_bugreport_devhub "dhk_..."`);
     return;
   }
   if (!VALID.test(url)) {
@@ -193,4 +263,4 @@ setTimeout(async () => {
   }
 }, 1000);
 
-if (typeof module !== 'undefined') module.exports = { buildMessage, filesFor, multipart, send, VALID };
+if (typeof module !== 'undefined') module.exports = { buildMessage, filesFor, multipart, send, sendDevhub, deliverAll, VALID };

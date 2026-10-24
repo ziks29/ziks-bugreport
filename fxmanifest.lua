@@ -4,8 +4,8 @@ lua54 'yes'
 
 name        'ziks-bugreport'
 author      'ziks'
-description 'In-game bug reports with screenshot and full context, sent to a Discord webhook'
-version     '1.0.0'
+description 'In-game bug reports with screenshot and full context, sent to a Discord webhook or ziks Dev Hub'
+version     '1.1.0'
 repository  'https://github.com/ziks29/ziks-bugreport'
 
 shared_script 'config.lua'

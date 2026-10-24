@@ -1,6 +1,6 @@
 # ziks-bugreport
 
-Free in-game bug reports for FiveM, delivered to a **Discord webhook**.
+Free in-game bug reports for FiveM, delivered to a **Discord webhook** and/or a free **[ziks Dev Hub](https://dev.ushpuras.dev)** board.
 
 Players press **F9** (or type `/bug`), describe the problem, crop a screenshot, and send it. Your Discord channel gets a clean embed with the screenshot and a report file that holds everything you need to reproduce the bug.
 
@@ -68,8 +68,17 @@ Each report now opens its own post, titled `[High] Car falls through the map`.
 ## Privacy
 Reports go only to your webhook; nothing is sent anywhere else. Reports include the player's name, Discord ID, license and character data, but never IP addresses. Turn off anything you don't want in `Config.Attach`. Tell your players in your rules that bug reports include this data.
 
-## Coming next
-**ziks Dev Hub:** a free hosted board with kanban, Discord `/bug` commands, tester roles and releases. `ziks-bugreport` will be able to send reports to the board instead of a webhook.
+## ziks Dev Hub (free bug board)
+Send reports to **[ziks Dev Hub](https://dev.ushpuras.dev)**, a free hosted kanban and bug tracker for FiveM servers. Each report becomes a card with the screenshot, the report file and the player data attached. Testers can also file bugs with `/bug` in your Discord.
+
+1. Sign in at [dev.ushpuras.dev](https://dev.ushpuras.dev) with Discord and create a workspace.
+2. **Settings → Game server → New key**, then add it to `server.cfg`:
+   ```cfg
+   set ziks_bugreport_devhub "dhk_..."
+   ```
+3. Restart. The console prints `Dev Hub OK: "<workspace>"`.
+
+Set both `ziks_bugreport_webhook` and `ziks_bugreport_devhub` to get a Discord message *and* a card. If one target is down, only that target is retried later. Players who have a tester role on your connected Discord server can pick a severity, in addition to the ACE permission.
 
 ## Links
 - More scripts: **[fivem.ushpuras.dev](https://fivem.ushpuras.dev)**
