@@ -1,0 +1,40 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="style.css"></head>
+<body>
+<div id="adm" class="hidden">
+  <div class="panel">
+    <header>
+      <div class="title"><span class="dot"></span><span id="h-title"></span></div>
+      <span class="count" id="count"></span>
+      <button class="x" id="x" aria-label="Close"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+    </header>
+    <div class="view" id="v-form">
+      <div class="filters">
+        <div class="row"><span class="lb" id="l-cat"></span><div class="chips" id="cats"></div></div>
+        <div class="row" id="sevrow"><span class="lb" id="l-sev"></span><div class="chips" id="sevs"></div></div>
+      </div>
+      <div class="cols">
+        <div class="col">
+          <input id="f-title" maxlength="150" autocomplete="off">
+          <textarea id="f-desc" rows="3" maxlength="2000"></textarea>
+          <textarea id="f-steps" rows="3" maxlength="1500"></textarea>
+          <div class="two"><textarea id="f-exp" rows="2" maxlength="600"></textarea><textarea id="f-act" rows="2" maxlength="600"></textarea></div>
+          <textarea id="f-console" rows="2" maxlength="3000" class="mono"></textarea>
+        </div>
+        <div class="col">
+          <div class="card" id="shotcard"><h3 id="h-shot"></h3>
+            <div class="thumb" id="thumb"><div class="imgwrap" id="wrap"><img id="img" alt="" draggable="false"><div class="sel hidden" id="sel"></div></div><span id="noshot" class="dim hidden"></span></div>
+            <div class="row sp"><span class="dim note" id="hint"></span><span class="spacer"></span><button class="ghost hidden" id="resetsel"></button></div>
+            <div class="row sp"><label class="f"><input type="checkbox" id="f-shot" checked><span id="l-shot"></span></label><span class="spacer"></span><button class="ghost" id="retake"></button></div>
+          </div>
+          <div class="card"><h3 id="h-ctx"></h3><div class="kv" id="kv"></div><div class="dim note" id="auto"></div></div>
+        </div>
+      </div>
+    </div>
+    <div class="err hidden" id="err"></div>
+    <footer><span class="spacer"></span><button class="ghost" id="cancel"></button><button class="primary" id="send"></button></footer>
+  </div>
+</div>
+<div id="toasts"></div>
+<script src="app.js"></script>
+</body></html>
